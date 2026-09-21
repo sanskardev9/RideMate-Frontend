@@ -20,7 +20,7 @@ export const session = {
     localStorage.setItem(USER_KEY, JSON.stringify(user));
   },
   clear() {
-    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(TOKEN_KEY); 
     localStorage.removeItem(USER_KEY);
   },
 };
