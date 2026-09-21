@@ -186,10 +186,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
     authApi
       .me()
-      .then((fresh) => {
+      .then(({ access_token: refreshed, ...fresh }) => {
         if (cancelled) return;
         setUser(fresh);
-        session.save(session.token()!, fresh);
+        // Store the refreshed token so the seven-day window starts again.
+        session.save(refreshed || session.token()!, fresh);
       })
       .catch(() => {})
       .finally(() => !cancelled && setReady(true));

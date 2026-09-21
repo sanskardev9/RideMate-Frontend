@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useApp } from "../store/appStore";
 
@@ -10,9 +11,28 @@ const nav = [
 ] as const;
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  const { sosAlerts, mySos, triggerSos, cancelSos, connected, error, dismissError, group } =
-    useApp();
+  const {
+    sosAlerts,
+    mySos,
+    triggerSos,
+    cancelSos,
+    connected,
+    error,
+    dismissError,
+    group,
+    refresh,
+  } = useApp();
   const location = useLocation();
+  const lastPath = useRef(location.pathname);
+
+  // Re-read the group's members, locations, chat and ride stats whenever the
+  // rider moves between tabs. Live events keep the open tab current, but a tab
+  // that was not open missed them, so it needs a fresh pull on arrival.
+  useEffect(() => {
+    if (lastPath.current === location.pathname) return;
+    lastPath.current = location.pathname;
+    void refresh();
+  }, [location.pathname, refresh]);
 
   const confirmSos = () => {
     if (!group) return;

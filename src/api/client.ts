@@ -43,6 +43,13 @@ export const onUnauthorized = (handler: () => void) => {
   };
 };
 
+/**
+ * Signing in with the wrong password is a 401 too, but it must not tear down
+ * an existing session — only an expired or rejected token should do that.
+ */
+const isCredentialCheck = (path: string) =>
+  path.startsWith("/auth/login") || path.startsWith("/auth/register");
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = session.token();
   let response: Response;
@@ -60,6 +67,10 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   }
 
   if (response.status === 401) {
+    if (isCredentialCheck(path)) {
+      const body = await response.json().catch(() => null);
+      throw new ApiError(401, body?.detail || "Invalid email or password");
+    }
     unauthorized.forEach((handler) => handler());
     throw new ApiError(401, "Your session has expired. Please sign in again.");
   }
@@ -162,7 +173,8 @@ export const authApi = {
       method: "POST",
       body: JSON.stringify({ name, email, password }),
     }),
-  me: () => api<User>("/auth/me"),
+  // The response carries a refreshed token, which extends the session.
+  me: () => api<User & { access_token?: string }>("/auth/me"),
   updateName: (name: string) =>
     api<AuthResponse>("/auth/me", { method: "PATCH", body: JSON.stringify({ name }) }),
 };

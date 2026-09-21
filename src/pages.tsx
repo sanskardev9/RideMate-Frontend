@@ -34,11 +34,29 @@ function useElapsed(startedAt?: string, endedAt?: string | null, reported = 0) {
   return Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000));
 }
 
+const EyeIcon = ({ off }: { off: boolean }) => (
+  <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    {off ? (
+      <>
+        <path d="M9.9 4.24A9.1 9.1 0 0 1 12 4c7 0 10 8 10 8a17.6 17.6 0 0 1-2.2 3.2M6.6 6.6A17.6 17.6 0 0 0 2 12s3 8 10 8a9.1 9.1 0 0 0 5.4-1.6" />
+        <path d="M14.1 14.1a3 3 0 1 1-4.2-4.2" />
+        <path d="m2 2 20 20" />
+      </>
+    ) : (
+      <>
+        <path d="M2 12s3-8 10-8 10 8 10 8-3 8-10 8-10-8-10-8Z" />
+        <circle cx="12" cy="12" r="3" />
+      </>
+    )}
+  </svg>
+);
+
 export function Auth({ register = false }: { register?: boolean }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const { login, register: signup, authLoading } = useApp();
   const navigate = useNavigate();
 
@@ -81,14 +99,32 @@ export function Auth({ register = false }: { register?: boolean }) {
         </label>
         <label>
           Password
-          <input
-            required
-            minLength={8}
-            type="password"
-            autoComplete={register ? "new-password" : "current-password"}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
+          <div className="pwfield">
+            <input
+              required
+              minLength={8}
+              type={showPassword ? "text" : "password"}
+              autoComplete={register ? "new-password" : "current-password"}
+              value={password}
+              onChange={(e) => {
+                setPassword(e.target.value);
+                // Clearing the field also re-hides it, so retyping never
+                // starts out in plain text unexpectedly.
+                if (!e.target.value) setShowPassword(false);
+              }}
+            />
+            {password.length > 0 && (
+              <button
+                type="button"
+                className="pweye"
+                onClick={() => setShowPassword((shown) => !shown)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                aria-pressed={showPassword}
+              >
+                <EyeIcon off={showPassword} />
+              </button>
+            )}
+          </div>
         </label>
         {error && <p className="error">{error}</p>}
         <button className="primary" disabled={authLoading}>

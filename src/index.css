@@ -718,3 +718,36 @@ label input,
     animation: none;
   }
 }
+
+/* Password field with a show/hide toggle sitting inside the input. */
+.pwfield {
+  position: relative;
+  display: block;
+}
+.pwfield input {
+  width: 100%;
+  padding-right: 48px;
+}
+.pweye {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: #a8af99;
+}
+.pweye:hover {
+  color: #d4f653;
+  background: #2a3024;
+}
+.pweye:focus-visible {
+  outline: 2px solid #d4f653;
+  outline-offset: 2px;
+}
