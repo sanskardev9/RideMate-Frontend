@@ -187,12 +187,15 @@ export function MapPage() {
     <>
       <div className="maphead">
         <div>
-          <p className="eyebrow">{ride ? "ACTIVE RIDE" : "NO RIDE RUNNING"}</p>
-          <h1>{group.name}</h1>
+          {/* Off a ride nothing is shared, so the group is not named here. */}
+          <p className="eyebrow">{ride?.joined ? "ACTIVE RIDE" : "PRIVATE"}</p>
+          <h1>{ride?.joined ? ride.groupName : "Just you"}</h1>
           <p className="muted">
-            {onlineRiders.size === 1
-              ? "1 rider sharing live location"
-              : `${onlineRiders.size} riders sharing live location`}
+            {ride?.joined
+              ? onlineRiders.size === 1
+                ? "1 rider sharing live location"
+                : `${onlineRiders.size} riders sharing live location`
+              : "Your location stays on this device until a ride starts"}
           </p>
         </div>
         <button className="round" onClick={requestLocation} aria-label="Share my location">
@@ -713,7 +716,8 @@ export function ProfilePage() {
       <section className="panel">
         <b>Safety & privacy</b>
         <p className="muted">
-          Live location is shared only with groups you belong to, and only while you are sharing.
+          Your location is shared with your group only while you are on a ride. Off a ride it
+          never leaves your device, and ending a ride erases the positions you shared.
         </p>
         <small>
           {groups.length} {groups.length === 1 ? "group" : "groups"} ·{" "}

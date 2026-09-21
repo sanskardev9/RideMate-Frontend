@@ -117,6 +117,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const typingSentAt = useRef(0);
   // Read inside the geolocation callback, which outlives a single render.
   const groupIdRef = useRef<string | null>(activeGroupId);
+  // Read inside the geolocation callback, which outlives a single render.
+  const ridingRef = useRef(false);
 
   const group = useMemo(
     () => groups.find((candidate) => candidate.id === activeGroupId) ?? groups[0] ?? null,
@@ -364,7 +366,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
     setMyLocation(next);
     setLocationError(null);
-    if (groupId)
+    // Your position only leaves the device while you are on a ride. Off a
+    // ride it stays here, shown to you and to nobody else.
+    if (groupId && ridingRef.current)
       ws.send({
         type: "location_update",
         groupId,
@@ -428,6 +432,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => () => stopLocation(), [stopLocation]);
+
+  useEffect(() => {
+    const riding = Boolean(ride && ride.joined && !ride.endedAt);
+    ridingRef.current = riding;
+    // Off a ride nobody is sharing, so hold no positions but your own.
+    if (!riding) setLocations((current) => (current.length ? [] : current));
+  }, [ride]);
 
   const sendMessage = async (text: string) => {
     if (!group) return;

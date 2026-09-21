@@ -74,19 +74,21 @@ export function LiveMap() {
   // Bumped on zoom so the pixel-based spread is recalculated for the new scale.
   const [viewVersion, setViewVersion] = useState(0);
 
-  const { locations, myLocation, startLocation, locationStatus, user } = useApp();
+  const { locations, myLocation, startLocation, locationStatus, ride, user } = useApp();
   // Read inside the setup effect, which must not re-run when this changes.
   const canAutoStart = useRef(locationStatus === "granted");
   canAutoStart.current = locationStatus === "granted";
   const cartoKey = import.meta.env.VITE_CARTO_KEY;
 
-  const riders = useMemo(
-    () => [
-      ...locations.filter((entry) => entry.userId !== myLocation?.userId),
-      ...(myLocation ? [myLocation] : []),
-    ],
-    [locations, myLocation],
-  );
+  // Other riders appear only while a ride is running. The server already
+  // withholds them, but enforcing it here too means a stale response can never
+  // put somebody on the map who is not sharing.
+  const riders = useMemo(() => {
+    const others = ride?.joined
+      ? locations.filter((entry) => entry.userId !== myLocation?.userId)
+      : [];
+    return [...others, ...(myLocation ? [myLocation] : [])];
+  }, [locations, myLocation, ride]);
 
   useEffect(() => {
     if (!container.current || map.current) return;
