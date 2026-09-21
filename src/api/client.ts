@@ -6,7 +6,7 @@ const TOKEN_KEY = "ridemate_token";
 const USER_KEY = "ridemate_user";
 
 export const session = {
-  token: () => localStorage.getItem(TOKEN_KEY),
+  token: () => localStorage.getItem(TOKEN_KEY), 
   user(): User | null {
     try {
       const raw = localStorage.getItem(USER_KEY);
