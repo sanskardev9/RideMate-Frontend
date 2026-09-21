@@ -839,3 +839,11 @@ label input,
 .map .leaflet-bottom.leaflet-right {
   margin-bottom: 96px;
 }
+
+/* Centre the crosshair glyph inside the round locate button. */
+.round {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  line-height: 1;
+}

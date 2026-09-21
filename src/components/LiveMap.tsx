@@ -74,7 +74,11 @@ export function LiveMap() {
   // Bumped on zoom so the pixel-based spread is recalculated for the new scale.
   const [viewVersion, setViewVersion] = useState(0);
 
-  const { locations, myLocation, startLocation, locationStatus, ride, user } = useApp();
+  const { locations, myLocation, startLocation, locationStatus, recenterToken, ride, user } =
+    useApp();
+  // Set when the rider asks to be centred, cleared once it has happened --
+  // a fix may still be seconds away when the button is pressed.
+  const pendingRecenter = useRef(false);
   // Read inside the setup effect, which must not re-run when this changes.
   const canAutoStart = useRef(locationStatus === "granted");
   canAutoStart.current = locationStatus === "granted";
@@ -123,6 +127,20 @@ export function LiveMap() {
       hasFitted.current = false;
     };
   }, [startLocation, cartoKey]);
+
+  useEffect(() => {
+    if (recenterToken) pendingRecenter.current = true;
+  }, [recenterToken]);
+
+  useEffect(() => {
+    if (!pendingRecenter.current || !map.current || !myLocation) return;
+    pendingRecenter.current = false;
+    map.current.setView(
+      [myLocation.latitude, myLocation.longitude],
+      Math.max(map.current.getZoom(), 16),
+      { animate: true },
+    );
+  }, [recenterToken, myLocation]);
 
   useEffect(() => {
     const current = map.current;

@@ -68,6 +68,9 @@ type Store = {
   locationStatus: LocationStatus;
   sharingLocation: boolean;
   startLocation: () => void;
+  /** Bumped to ask the map to centre on the rider's own position. */
+  recenterToken: number;
+  recenter: () => void;
   stopLocation: () => void;
 
   ride: Ride | null;
@@ -112,6 +115,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [typing, setTyping] = useState<Record<string, { name: string; at: number }>>({});
   const [sharingLocation, setSharingLocation] = useState(false);
   const [locationStatus, setLocationStatus] = useState<LocationStatus>("idle");
+  const [recenterToken, setRecenterToken] = useState(0);
 
   const watchId = useRef<number | null>(null);
   const typingSentAt = useRef(0);
@@ -543,6 +547,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       locationError,
       locationStatus,
       sharingLocation,
+      recenterToken,
+      recenter: () => setRecenterToken((token) => token + 1),
       startLocation,
       stopLocation,
 
@@ -620,6 +626,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       locationError,
       locationStatus,
       sharingLocation,
+      recenterToken,
       startLocation,
       stopLocation,
       ride,

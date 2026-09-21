@@ -143,15 +143,28 @@ export function Auth({ register = false }: { register?: boolean }) {
 }
 
 export function MapPage() {
-  const { group, ride, locations, myLocation, locationError, locationStatus, startLocation } =
-    useApp();
+  const {
+    group,
+    ride,
+    locations,
+    myLocation,
+    locationError,
+    locationStatus,
+    startLocation,
+    recenter,
+  } = useApp();
   const [showLocationGate, setShowLocationGate] = useState(false);
 
   // Asking outright only works while the browser is still willing to prompt.
   // Otherwise explain first, and say how to unblock it if it is already off.
   const requestLocation = () => {
-    if (locationStatus === "granted") startLocation();
-    else setShowLocationGate(true);
+    if (locationStatus !== "granted") {
+      setShowLocationGate(true);
+      return;
+    }
+    // Make sure a watch is running, then pull the map back to where we are.
+    startLocation();
+    recenter();
   };
 
   // Offer it once per visit when the browser is still willing to ask, rather
