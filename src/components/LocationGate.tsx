@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useApp } from "../store/appStore";
 
 /**
@@ -14,9 +15,13 @@ const isTouch = () => /iPad|iPhone|iPod|Android/.test(navigator.userAgent);
 function reEnableSteps() {
   if (isApple() && isTouch())
     return [
-      "Tap the AA button on the left of the address bar",
-      "Choose Website Settings",
-      "Set Location to Allow, then reload",
+      // The system switch is the one people miss: with Location Services off
+      // for Safari, no website can ask, and Safari shows no Location option.
+      "Open Settings, then Privacy & Security, then Location Services",
+      "Make sure it is on, and set Safari Websites to While Using the App",
+      "Back in Safari, tap AA on the left of the address bar",
+      "Choose Website Settings, set Location to Ask or Allow",
+      "Return here and reload",
     ];
   if (isAndroid())
     return [
@@ -34,10 +39,14 @@ function reEnableSteps() {
 export function LocationGate({ onClose }: { onClose: () => void }) {
   const { locationStatus, locationError, startLocation, group } = useApp();
 
-  const allow = () => {
-    startLocation();
-    onClose();
-  };
+  // Keep the sheet open: if the browser has already blocked us the request
+  // fails instantly, and the sheet turns into the instructions in place
+  // rather than making someone hunt for a second button.
+  const allow = () => startLocation();
+
+  useEffect(() => {
+    if (locationStatus === "granted") onClose();
+  }, [locationStatus, onClose]);
 
   const body = () => {
     if (locationStatus === "insecure")
