@@ -16,7 +16,7 @@ export const session = {
     }
   },
   save(token: string, user: User) {
-    localStorage.setItem(TOKEN_KEY, token);
+    localStorage.setItem(TOKEN_KEY, token); 
     localStorage.setItem(USER_KEY, JSON.stringify(user));
   },
   clear() {
