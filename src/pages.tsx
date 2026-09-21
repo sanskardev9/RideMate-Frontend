@@ -1,6 +1,7 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { LiveMap } from "./components/LiveMap";
+import { LocationGate } from "./components/LocationGate";
 import { useApp } from "./store/appStore";
 
 const clock = (iso: string) =>
@@ -142,7 +143,25 @@ export function Auth({ register = false }: { register?: boolean }) {
 }
 
 export function MapPage() {
-  const { group, ride, locations, myLocation, locationError, startLocation } = useApp();
+  const { group, ride, locations, myLocation, locationError, locationStatus, startLocation } =
+    useApp();
+  const [showLocationGate, setShowLocationGate] = useState(false);
+
+  // Asking outright only works while the browser is still willing to prompt.
+  // Otherwise explain first, and say how to unblock it if it is already off.
+  const requestLocation = () => {
+    if (locationStatus === "granted") startLocation();
+    else setShowLocationGate(true);
+  };
+
+  // Offer it once per visit when the browser is still willing to ask, rather
+  // than leaving a rider wondering why nobody can see them.
+  const alreadyOffered = useRef(false);
+  useEffect(() => {
+    if (alreadyOffered.current || !group || locationStatus !== "prompt") return;
+    alreadyOffered.current = true;
+    setShowLocationGate(true);
+  }, [group, locationStatus]);
   const onlineRiders = new Set(
     locations.filter((entry) => entry.online).map((entry) => entry.userId),
   );
@@ -176,15 +195,19 @@ export function MapPage() {
               : `${onlineRiders.size} riders sharing live location`}
           </p>
         </div>
-        <button className="round" onClick={startLocation} aria-label="Share my location">
+        <button className="round" onClick={requestLocation} aria-label="Share my location">
           ⌖
         </button>
       </div>
       {locationError && (
         <div className="notice">
-          {locationError} <button onClick={startLocation}>Retry</button>
+          {locationError}{" "}
+          <button onClick={requestLocation}>
+            {locationStatus === "denied" ? "How to fix" : "Retry"}
+          </button>
         </div>
       )}
+      {showLocationGate && <LocationGate onClose={() => setShowLocationGate(false)} />}
       <LiveMap />
       <Link className="map-card" to="/ride">
         {ride && <span className="pulse" />}

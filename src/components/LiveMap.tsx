@@ -74,7 +74,10 @@ export function LiveMap() {
   // Bumped on zoom so the pixel-based spread is recalculated for the new scale.
   const [viewVersion, setViewVersion] = useState(0);
 
-  const { locations, myLocation, startLocation, user } = useApp();
+  const { locations, myLocation, startLocation, locationStatus, user } = useApp();
+  // Read inside the setup effect, which must not re-run when this changes.
+  const canAutoStart = useRef(locationStatus === "granted");
+  canAutoStart.current = locationStatus === "granted";
   const cartoKey = import.meta.env.VITE_CARTO_KEY;
 
   const riders = useMemo(
@@ -103,7 +106,10 @@ export function LiveMap() {
     ).addTo(created);
     L.control.zoom({ position: "bottomright" }).addTo(created);
     created.on("zoomend", () => setViewVersion((version) => version + 1));
-    startLocation();
+    // Only resume a permission already given. Firing the browser's prompt on
+    // page load, with no explanation, is the surest way to get a refusal --
+    // and a refusal cannot be undone from the page.
+    if (canAutoStart.current) startLocation();
 
     const pins = markers.current;
     const lines = leaders.current;

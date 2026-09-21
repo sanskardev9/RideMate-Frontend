@@ -29,6 +29,15 @@ import type {
 } from "../types";
 
 const ACTIVE_GROUP_KEY = "ridemate_active_group";
+
+/** What the browser will do if we ask for a position right now. */
+export type LocationStatus =
+  | "idle"
+  | "prompt"
+  | "granted"
+  | "denied"
+  | "unsupported"
+  | "insecure";
 /** How long a "<name> is typing" hint survives without a refresh. */
 const TYPING_TIMEOUT_MS = 4000;
 
@@ -56,6 +65,7 @@ type Store = {
   locations: RiderLocation[];
   myLocation: RiderLocation | null;
   locationError: string | null;
+  locationStatus: LocationStatus;
   sharingLocation: boolean;
   startLocation: () => void;
   stopLocation: () => void;
@@ -101,6 +111,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [sosAlerts, setSosAlerts] = useState<SosAlert[]>([]);
   const [typing, setTyping] = useState<Record<string, { name: string; at: number }>>({});
   const [sharingLocation, setSharingLocation] = useState(false);
+  const [locationStatus, setLocationStatus] = useState<LocationStatus>("idle");
 
   const watchId = useRef<number | null>(null);
   const typingSentAt = useRef(0);
@@ -137,6 +148,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setRide(null);
     setSosAlerts([]);
     setTyping({});
+  }, []);
+
+  useEffect(() => {
+    if (!("geolocation" in navigator)) return setLocationStatus("unsupported");
+    // Browsers refuse geolocation outside a secure context, which includes
+    // plain http:// on a LAN address -- localhost is the only exception.
+    if (!window.isSecureContext) return setLocationStatus("insecure");
+    if (!navigator.permissions?.query) return setLocationStatus("prompt");
+
+    let subscription: PermissionStatus | undefined;
+    const apply = (state: PermissionState) =>
+      setLocationStatus(state === "prompt" ? "prompt" : state);
+    navigator.permissions
+      .query({ name: "geolocation" as PermissionName })
+      .then((result) => {
+        subscription = result;
+        apply(result.state);
+        result.onchange = () => apply(result.state);
+      })
+      // Safari has only recently supported this; assume we can still ask.
+      .catch(() => setLocationStatus("prompt"));
+    return () => {
+      if (subscription) subscription.onchange = null;
+    };
   }, []);
 
   useEffect(() => onUnauthorized(signOut), [signOut]);
@@ -344,20 +379,43 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setLocationError("Join or create a group before sharing your location.");
       return;
     }
-    if (!navigator.geolocation) {
-      setLocationError("This device cannot share a location.");
+    if (!("geolocation" in navigator)) {
+      setLocationStatus("unsupported");
+      setLocationError("This browser cannot share a location.");
       return;
     }
-    if (watchId.current !== null) return;
+    if (!window.isSecureContext) {
+      setLocationStatus("insecure");
+      setLocationError("Location sharing needs a secure (https) connection.");
+      return;
+    }
+
+    // Always drop the previous watch first. watchPosition hands back an id
+    // even when it fails immediately, so holding on to it made every retry a
+    // silent no-op -- the button appeared dead.
+    if (watchId.current !== null) navigator.geolocation.clearWatch(watchId.current);
+    watchId.current = null;
+    setLocationError(null);
+
     watchId.current = navigator.geolocation.watchPosition(
-      publishLocation,
-      (cause) =>
-        setLocationError(
-          cause.code === cause.PERMISSION_DENIED
-            ? "Location permission is needed to share your ride."
-            : "Could not get a location fix yet.",
-        ),
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 },
+      (position) => {
+        setLocationStatus("granted");
+        publishLocation(position);
+      },
+      (cause) => {
+        if (watchId.current !== null) navigator.geolocation.clearWatch(watchId.current);
+        watchId.current = null;
+        setSharingLocation(false);
+        if (cause.code === cause.PERMISSION_DENIED) {
+          setLocationStatus("denied");
+          setLocationError("Location is blocked for this site.");
+        } else if (cause.code === cause.TIMEOUT) {
+          setLocationError("Still looking for a GPS fix. Try somewhere with a clearer sky.");
+        } else {
+          setLocationError("Could not get a location fix yet.");
+        }
+      },
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 5000 },
     );
     setSharingLocation(true);
   }, [publishLocation]);
@@ -472,6 +530,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       locations,
       myLocation,
       locationError,
+      locationStatus,
       sharingLocation,
       startLocation,
       stopLocation,
@@ -548,6 +607,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       locations,
       myLocation,
       locationError,
+      locationStatus,
       sharingLocation,
       startLocation,
       stopLocation,
