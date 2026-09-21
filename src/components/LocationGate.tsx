@@ -8,22 +8,38 @@ import { useApp } from "../store/appStore";
  * it has already been blocked it shows how to turn it back on.
  */
 
-const isApple = () => /iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent);
-const isAndroid = () => /Android/.test(navigator.userAgent);
-const isTouch = () => /iPad|iPhone|iPod|Android/.test(navigator.userAgent);
+/**
+ * Every browser hides this in a different place, and on iOS there are two
+ * separate switches: one for the app in iOS Settings, and one for this site
+ * inside the browser. Sending someone to the wrong menu is worse than saying
+ * nothing, so each case is named specifically.
+ */
+const ua = () => navigator.userAgent;
+const isIos = () => /iPad|iPhone|iPod/.test(ua());
+// Every iOS browser is WebKit underneath, but their menus differ completely.
+const iosBrowser = () =>
+  /CriOS/.test(ua()) ? "Chrome" : /FxiOS/.test(ua()) ? "Firefox" : /EdgiOS/.test(ua()) ? "Edge" : "Safari";
 
 function reEnableSteps() {
-  if (isApple() && isTouch())
+  if (isIos()) {
+    const app = iosBrowser();
+    if (app === "Safari")
+      return [
+        "Open iOS Settings, then Privacy & Security, then Location Services",
+        "Turn it on, and set Safari Websites to While Using the App",
+        "Back in Safari, tap AA on the left of the address bar",
+        "Choose Website Settings and set Location to Ask or Allow",
+        "Return here and reload",
+      ];
     return [
-      // The system switch is the one people miss: with Location Services off
-      // for Safari, no website can ask, and Safari shows no Location option.
-      "Open Settings, then Privacy & Security, then Location Services",
-      "Make sure it is on, and set Safari Websites to While Using the App",
-      "Back in Safari, tap AA on the left of the address bar",
-      "Choose Website Settings, set Location to Ask or Allow",
+      `Open iOS Settings, scroll to ${app}, tap Location`,
+      "Choose While Using the App",
+      `In ${app}, tap the ••• menu, then Settings, then Content Settings`,
+      "Open Location and allow it for this site",
       "Return here and reload",
     ];
-  if (isAndroid())
+  }
+  if (/Android/.test(ua()))
     return [
       "Tap the icon on the left of the address bar",
       "Open Permissions, then Location",
