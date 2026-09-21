@@ -62,6 +62,7 @@ type Store = {
 
   ride: Ride | null;
   startRide: () => Promise<void>;
+  joinRide: () => Promise<void>;
   endRideForEveryone: () => Promise<void>;
   leaveRide: () => Promise<void>;
 
@@ -277,6 +278,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         case "ride_started":
         case "ride_ended":
         case "ride_left":
+        case "ride_joined":
         case "member_left":
           void refresh();
           break;
@@ -479,6 +481,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         guard(async () => {
           if (!group) return;
           await groupsApi.startRide(group.id);
+          await refresh();
+          startLocation();
+        }),
+      joinRide: () =>
+        guard(async () => {
+          if (!ride) return;
+          await ridesApi.join(ride.id);
           await refresh();
           startLocation();
         }),

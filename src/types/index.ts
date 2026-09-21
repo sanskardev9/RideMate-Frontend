@@ -54,6 +54,8 @@ export type Ride = {
   durationSeconds: number;
   distanceKm: number;
   riderCount: number;
+  /** Whether the signed-in rider is still on this ride. */
+  joined: boolean;
 };
 
 export type SosAlert = {

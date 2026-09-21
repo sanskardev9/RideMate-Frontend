@@ -189,7 +189,9 @@ export function MapPage() {
       <Link className="map-card" to="/ride">
         {ride && <span className="pulse" />}
         <div>
-          <b>{ride ? "Ride in progress" : "Start a ride"}</b>
+          <b>
+            {!ride ? "Start a ride" : ride.joined ? "Ride in progress" : "Join the ride"}
+          </b>
           <small>
             {ride
               ? `${ride.riderCount} riding · ${ride.distanceKm.toFixed(1)} km`
@@ -483,7 +485,8 @@ export function GroupInfoPage() {
 }
 
 export function RidePage() {
-  const { group, ride, members, startRide, endRideForEveryone, leaveRide, user } = useApp();
+  const { group, ride, members, startRide, joinRide, endRideForEveryone, leaveRide, user } =
+    useApp();
   const [busy, setBusy] = useState(false);
   const elapsed = useElapsed(ride?.startedAt, ride?.endedAt, ride?.durationSeconds);
 
@@ -526,6 +529,43 @@ export function RidePage() {
           </p>
           <button className="primary" disabled={busy} onClick={() => run(startRide)}>
             {busy ? "Starting…" : "Start a ride"}
+          </button>
+        </section>
+      </div>
+    );
+
+  if (!ride.joined)
+    return (
+      <div className="page">
+        <p className="eyebrow">CURRENT SESSION</p>
+        <h1>{ride.groupName}</h1>
+        <section className="ride-hero">
+          <span>⌁</span>
+          <p>Started {clock(ride.startedAt)}</p>
+          <b>{group.name} is riding</b>
+        </section>
+        <div className="stats">
+          <div>
+            <b>{String(ride.riderCount).padStart(2, "0")}</b>
+            <small>Riders</small>
+          </div>
+          <div>
+            <b>{ride.distanceKm.toFixed(1)}</b>
+            <small>km together</small>
+          </div>
+          <div>
+            <b>{duration(elapsed)}</b>
+            <small>Duration</small>
+          </div>
+        </div>
+        <section className="panel">
+          <b>You are not on this ride</b>
+          <p className="muted">
+            Join it to share your live location with {group.name}. A group rides together, so
+            there is only ever one ride at a time — join this one instead of starting another.
+          </p>
+          <button className="primary" disabled={busy} onClick={() => run(joinRide)}>
+            {busy ? "Joining…" : "Join this ride"}
           </button>
         </section>
       </div>

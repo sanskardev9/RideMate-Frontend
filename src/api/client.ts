@@ -158,6 +158,7 @@ const toRide = (raw: Record<string, unknown>): Ride => ({
   durationSeconds: Number(raw.duration_seconds ?? 0),
   distanceKm: Number(raw.distance_km ?? 0),
   riderCount: Number(raw.rider_count ?? 0),
+  joined: Boolean(raw.joined),
 });
 
 type AuthResponse = { access_token: string; user: User };
@@ -225,4 +226,7 @@ export const ridesApi = {
     return toRide(await api<Record<string, unknown>>(`/rides/${rideId}/end`, { method: "POST" }));
   },
   leave: (rideId: string) => api<void>(`/rides/${rideId}/leave`, { method: "POST" }),
+  async join(rideId: string) {
+    return toRide(await api<Record<string, unknown>>(`/rides/${rideId}/join`, { method: "POST" }));
+  },
 };
