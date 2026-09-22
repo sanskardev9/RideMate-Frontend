@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useApp } from "../store/appStore";
+import { SosButton } from "./SosButton";
+import { CallDock } from "./CallDock";
 
 const nav = [
   ["/map", "◉", "Map"],
@@ -20,7 +22,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
     error,
     dismissError,
     group,
+    ride,
     refresh,
+    alarmSounding,
+    silenceAlarm,
   } = useApp();
   const location = useLocation();
   const lastPath = useRef(location.pathname);
@@ -33,14 +38,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
     lastPath.current = location.pathname;
     void refresh();
   }, [location.pathname, refresh]);
-
-  const confirmSos = () => {
-    if (!group) return;
-    if (
-      window.confirm(`Send an SOS alert and your current location to ${group.name}?`)
-    )
-      void triggerSos();
-  };
 
   const othersInTrouble = sosAlerts.filter((alert) => alert.id !== mySos?.id);
 
@@ -65,25 +62,50 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
       {mySos && (
         <div className="alert">
-          SOS ACTIVE · Your group can see your live location
-          <button onClick={() => void cancelSos()}>Cancel</button>
+          <span className="alert-dot" />
+          <div>
+            <b>SOS active</b>
+            <small>Your group can see your live location</small>
+          </div>
+          {alarmSounding && (
+            <button className="alert-mute" onClick={silenceAlarm}>
+              Mute
+            </button>
+          )}
+          <button onClick={() => void cancelSos()}>Stand down</button>
         </div>
       )}
 
-      {othersInTrouble.map((alert) => (
+      {othersInTrouble.map((alert, index) => (
         <div className="alert" key={alert.id}>
-          {alert.riderName} raised an SOS
+          <span className="alert-dot" />
+          <div>
+            <b>{alert.riderName} raised an SOS</b>
+            <small>Their pin is live on the map</small>
+          </div>
+          {/* One silence control is enough, however many alerts are up. */}
+          {alarmSounding && !mySos && index === 0 && (
+            <button className="alert-mute" onClick={silenceAlarm}>
+              Mute
+            </button>
+          )}
         </div>
       ))}
 
       <section className="content">{children}</section>
 
-      {location.pathname !== "/profile" && group && (
-        <button className="sos" aria-label="Trigger SOS" onClick={confirmSos}>
-          SOS
-          <small>Alert</small>
-        </button>
+      {/* An SOS carries your live position to the group you are riding with,
+          so it only exists while you are actually on a ride. */}
+      {location.pathname !== "/profile" && group && (ride?.joined || mySos) && (
+        <SosButton
+          active={Boolean(mySos)}
+          groupName={group.name}
+          onTrigger={triggerSos}
+          onCancel={() => void cancelSos()}
+        />
       )}
+
+      <CallDock />
 
       <nav className="bottomnav">
         {nav.map(([to, icon, label]) => (

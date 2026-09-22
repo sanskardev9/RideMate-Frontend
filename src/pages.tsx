@@ -3,9 +3,24 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { LiveMap } from "./components/LiveMap";
 import { LocationGate } from "./components/LocationGate";
 import { useApp } from "./store/appStore";
+import { groupsApi } from "./api/client";
+import { calls } from "./webrtc/manager";
+import { formatDistance, groupSpreadMeters } from "./utils/geo";
+import type { RideSummary } from "./types";
 
 const clock = (iso: string) =>
   new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+/** "Today", "Yesterday", then a plain date -- how a rider thinks of a ride. */
+const rideDay = (iso: string) => {
+  const day = new Date(iso);
+  const midnight = new Date();
+  midnight.setHours(0, 0, 0, 0);
+  const daysBack = Math.floor((midnight.getTime() - day.getTime()) / 86400000) + 1;
+  if (daysBack <= 0) return "Today";
+  if (daysBack === 1) return "Yesterday";
+  return day.toLocaleDateString([], { day: "numeric", month: "short" });
+};
 
 const pad = (value: number) => String(value).padStart(2, "0");
 
@@ -179,6 +194,14 @@ export function MapPage() {
     locations.filter((entry) => entry.online).map((entry) => entry.userId),
   );
   if (myLocation) onlineRiders.add(myLocation.userId);
+  // With somebody else on the map, the locate button frames the group.
+  const others = ride?.joined
+    ? locations.filter((entry) => entry.userId !== myLocation?.userId)
+    : [];
+  const othersSharing = others.length > 0;
+  // How strung out the group is: one number, however many riders there are.
+  const spread =
+    othersSharing && myLocation ? groupSpreadMeters([myLocation, ...others]) : 0;
 
   if (!group)
     return (
@@ -207,11 +230,20 @@ export function MapPage() {
             {ride?.joined
               ? onlineRiders.size === 1
                 ? "1 rider sharing live location"
-                : `${onlineRiders.size} riders sharing live location`
+                : `${onlineRiders.size} riders sharing${
+                    spread ? ` · spread over ${formatDistance(spread)}` : " live location"
+                  }`
               : "Your location stays on this device until a ride starts"}
           </p>
         </div>
-        <button className="round" onClick={requestLocation} aria-label="Share my location">
+        <button
+          className="round"
+          onClick={requestLocation}
+          aria-label={
+            othersSharing ? "Fit every rider on screen" : "Centre the map on me"
+          }
+          title={othersSharing ? "Show everyone" : "Show me"}
+        >
           ⌖
         </button>
       </div>
@@ -429,6 +461,23 @@ export function GroupInfoPage() {
   const [busy, setBusy] = useState(false);
 
   const target = groups.find((entry) => entry.id === groupId) ?? null;
+  const [history, setHistory] = useState<RideSummary[] | null>(null);
+  const past = history?.filter((entry) => entry.endedAt) ?? null;
+  const targetId = target?.id;
+
+  // Reloaded whenever the running ride changes, so a ride that has just
+  // finished drops into the list without the page being reopened.
+  useEffect(() => {
+    if (!targetId) return;
+    let current = true;
+    groupsApi
+      .rides(targetId)
+      .then((rides) => current && setHistory(rides))
+      .catch(() => current && setHistory([]));
+    return () => {
+      current = false;
+    };
+  }, [targetId, ride?.id, ride?.endedAt]);
 
   // Member and presence data in the store follows the active group.
   useEffect(() => {
@@ -493,6 +542,17 @@ export function GroupInfoPage() {
         </button>
       </section>
 
+      <section className="panel">
+        <b>Talk to the group</b>
+        <p className="muted">
+          A voice call to everyone in {target.name} who is online. Audio only — nothing to
+          look at while you ride.
+        </p>
+        <button className="secondary" onClick={() => void calls.callGroup(target.id, target.name)}>
+          Start a group call
+        </button>
+      </section>
+
       <h2>Members</h2>
       {showingMembers.length === 0 && <p className="muted">Loading members…</p>}
       {showingMembers.map((member) => (
@@ -512,7 +572,42 @@ export function GroupInfoPage() {
                   : "Offline"}
             </small>
           </div>
-          <i className={member.online ? "online" : ""} />
+          {member.id !== user?.id && member.online ? (
+            <button
+              className="callbtn"
+              aria-label={`Call ${member.name}`}
+              onClick={() => void calls.callRider(target.id, member.id, member.name)}
+            >
+              Call
+            </button>
+          ) : (
+            <i className={member.online ? "online" : ""} />
+          )}
+        </div>
+      ))}
+
+      <h2>Previous rides</h2>
+      {history === null && <p className="muted">Loading rides…</p>}
+      {/* The ride still running is shown at the top of the page, not here. */}
+      {past?.length === 0 && (
+        <p className="muted">No rides yet. The first one lands here when it ends.</p>
+      )}
+      {past?.map((entry) => (
+        <div className="ridelog" key={entry.id}>
+          <span className="ridelog-when">
+            <b>{rideDay(entry.startedAt)}</b>
+            <small>{clock(entry.startedAt)}</small>
+          </span>
+          <div>
+            <b>
+              {entry.distanceKm.toFixed(1)} km · {duration(entry.durationSeconds)}
+            </b>
+            <small>
+              Started by {entry.startedByName} · {entry.riderCount}{" "}
+              {entry.riderCount === 1 ? "rider" : "riders"}
+              {entry.joined && " · you rode"}
+            </small>
+          </div>
         </div>
       ))}
 
@@ -641,6 +736,9 @@ export function RidePage() {
         <p className="muted">
           {onlineCount} of {group.memberCount} riders are sharing a live location right now.
         </p>
+        <button className="primary" onClick={() => void calls.callGroup(group.id, group.name)}>
+          Call the group
+        </button>
         <button className="secondary" disabled={busy} onClick={() => run(leaveRide)}>
           {busy ? "Working…" : "End ride for me"}
         </button>
@@ -654,8 +752,52 @@ export function RidePage() {
   );
 }
 
+const TRACKING_CHOICES = [
+  {
+    mode: "screen" as const,
+    title: "Keep the screen awake",
+    detail: "For a mounted phone. RideMate keeps reporting as long as it is on screen.",
+  },
+  {
+    mode: "background" as const,
+    title: "Keep tracking in the background",
+    detail:
+      "Also reports for a while after you switch apps, by keeping the page awake with a silent sound. Uses more battery.",
+    unsupported:
+      "Not possible on iPhone: Safari suspends the page the moment you leave the app.",
+  },
+  {
+    mode: "off" as const,
+    title: "Only while I am looking",
+    detail: "Lightest on battery. Your pin freezes as soon as the screen sleeps.",
+  },
+];
+
 export function ProfilePage() {
-  const { user, logout, groups, connected, updateName } = useApp();
+  const {
+    user,
+    logout,
+    groups,
+    connected,
+    updateName,
+    trackingMode,
+    setTrackingMode,
+    backgroundTrackingSupported,
+    backgroundTracking,
+    ride,
+  } = useApp();
+
+  // Say plainly whether background tracking is doing anything at this moment,
+  // rather than leaving a selected option to imply it.
+  const backgroundStatus = !backgroundTrackingSupported
+    ? null
+    : trackingMode !== "background"
+      ? null
+      : backgroundTracking === "running"
+        ? "Running now — reporting while RideMate is out of sight."
+        : ride?.joined
+          ? "Blocked by the browser. Tap anywhere to start it."
+          : "Starts when you join a ride.";
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(user?.name ?? "");
   const [busy, setBusy] = useState(false);
@@ -726,6 +868,35 @@ export function ProfilePage() {
         )}
         <p className="muted">{user?.email}</p>
       </div>
+      <section className="panel">
+        <b>Location while riding</b>
+        <p className="muted">
+          A browser stops a page it cannot see, and a stopped page reports nothing — your
+          pin stays where you were until you open RideMate again.
+        </p>
+        <div className="choices">
+          {TRACKING_CHOICES.map((choice) => {
+            const blocked = Boolean(choice.unsupported) && !backgroundTrackingSupported;
+            return (
+              <button
+                key={choice.mode}
+                type="button"
+                className={`choice${trackingMode === choice.mode ? " on" : ""}`}
+                disabled={blocked}
+                onClick={() => setTrackingMode(choice.mode)}
+              >
+                <b>{choice.title}</b>
+                <small>{blocked ? choice.unsupported : choice.detail}</small>
+                {choice.mode === "background" && backgroundStatus && (
+                  <em className={backgroundTracking === "running" ? "live" : ""}>
+                    {backgroundStatus}
+                  </em>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </section>
       <section className="panel">
         <b>Safety & privacy</b>
         <p className="muted">

@@ -58,6 +58,20 @@ export type Ride = {
   joined: boolean;
 };
 
+/** One ride in a group's history. */
+export type RideSummary = {
+  id: string;
+  startedBy: string | null;
+  startedByName: string;
+  startedAt: string;
+  endedAt: string | null;
+  durationSeconds: number;
+  distanceKm: number;
+  riderCount: number;
+  /** Whether the signed-in rider was on this ride. */
+  joined: boolean;
+};
+
 export type SosAlert = {
   id: string;
   groupId: string;

@@ -1,4 +1,13 @@
-import type { Group, Member, Message, Ride, RiderLocation, SosAlert, User } from "../types";
+import type {
+  Group,
+  Member,
+  Message,
+  Ride,
+  RiderLocation,
+  RideSummary,
+  SosAlert,
+  User,
+} from "../types";
 
 const base = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 
@@ -161,6 +170,18 @@ const toRide = (raw: Record<string, unknown>): Ride => ({
   joined: Boolean(raw.joined),
 });
 
+const toRideSummary = (raw: Record<string, unknown>): RideSummary => ({
+  id: String(raw.id),
+  startedBy: raw.started_by === null ? null : String(raw.started_by),
+  startedByName: String(raw.started_by_name ?? "A rider"),
+  startedAt: String(raw.started_at),
+  endedAt: (raw.ended_at as string | null) ?? null,
+  durationSeconds: Number(raw.duration_seconds ?? 0),
+  distanceKm: Number(raw.distance_km ?? 0),
+  riderCount: Number(raw.rider_count ?? 0),
+  joined: Boolean(raw.joined),
+});
+
 type AuthResponse = { access_token: string; user: User };
 
 export const authApi = {
@@ -213,8 +234,50 @@ export const groupsApi = {
   async startRide(groupId: string) {
     return await api<{ id: string }>(`/groups/${groupId}/rides`, { method: "POST" });
   },
+  /** The group's ride history, newest first. */
+  async rides(groupId: string, limit = 20) {
+    return (
+      await api<Record<string, unknown>[]>(`/groups/${groupId}/rides?limit=${limit}`)
+    ).map(toRideSummary);
+  },
+  /** Position update over HTTP, for when the socket is down. */
+  shareLocation(
+    groupId: string,
+    latitude: number,
+    longitude: number,
+    accuracy: number | null,
+  ) {
+    return api<{ shared: boolean }>(`/groups/${groupId}/locations`, {
+      method: "POST",
+      body: JSON.stringify({ latitude, longitude, accuracy }),
+    });
+  },
   async activeSos(groupId: string) {
     return (await api<Record<string, unknown>[]>(`/groups/${groupId}/sos`)).map(toSosAlert);
+  },
+};
+
+/**
+ * The websocket carries an SOS normally; these are the same calls over HTTP,
+ * for when the socket is down. An alert is the one thing that must still get
+ * through on a bad connection.
+ */
+export const sosApi = {
+  async trigger(groupId: string, latitude: number, longitude: number) {
+    return toSosAlert(
+      await api<Record<string, unknown>>("/sos", {
+        method: "POST",
+        body: JSON.stringify({ groupId, latitude, longitude }),
+      }),
+    );
+  },
+  async cancel(groupId: string) {
+    return toSosAlert(
+      await api<Record<string, unknown>>("/sos/cancel", {
+        method: "POST",
+        body: JSON.stringify({ groupId }),
+      }),
+    );
   },
 };
 

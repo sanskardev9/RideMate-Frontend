@@ -13,11 +13,23 @@ import {
   onUnauthorized,
   ridesApi,
   session,
+  sosApi,
   toLocation,
   toMessage,
   toSosAlert,
 } from "../api/client";
 import { ws } from "../websocket/manager";
+import { startAlarm, stopAlarm, unlockAlarm } from "../audio/alarm";
+import {
+  backgroundKeepAliveSupported,
+  holdScreenAwake,
+  keepAliveState,
+  letScreenSleep,
+  onKeepAliveChange,
+  startBackgroundKeepAlive,
+  stopBackgroundKeepAlive,
+} from "../location/keepAlive";
+import type { KeepAliveState } from "../location/keepAlive";
 import type {
   Group,
   Member,
@@ -40,6 +52,25 @@ export type LocationStatus =
   | "insecure";
 /** How long a "<name> is typing" hint survives without a refresh. */
 const TYPING_TIMEOUT_MS = 4000;
+/** Slowest we will post a position over HTTP while the socket is down. */
+const REST_LOCATION_INTERVAL_MS = 5000;
+/** How often to ask for a fix outright while tracking in the background. */
+const BACKGROUND_FIX_INTERVAL_MS = 20000;
+const TRACKING_MODE_KEY = "ridemate_tracking_mode";
+
+/**
+ * How hard the app works to keep reporting a position.
+ *  - `screen`: hold a wake lock so a mounted phone does not sleep mid-ride.
+ *  - `background`: also keep the tab alive when the rider switches apps.
+ *    Android only, and best effort even there -- see location/keepAlive.ts.
+ *  - `off`: report only while the app is open and awake.
+ */
+export type TrackingMode = "off" | "screen" | "background";
+
+const readTrackingMode = (): TrackingMode => {
+  const saved = localStorage.getItem(TRACKING_MODE_KEY);
+  return saved === "off" || saved === "background" || saved === "screen" ? saved : "screen";
+};
 
 type Store = {
   user: User | null;
@@ -67,6 +98,12 @@ type Store = {
   locationError: string | null;
   locationStatus: LocationStatus;
   sharingLocation: boolean;
+  trackingMode: TrackingMode;
+  setTrackingMode: (mode: TrackingMode) => void;
+  /** False on iOS, where a backgrounded page is suspended whatever we do. */
+  backgroundTrackingSupported: boolean;
+  /** Whether background tracking is actually running right now. */
+  backgroundTracking: KeepAliveState;
   startLocation: () => void;
   /** Bumped to ask the map to centre on the rider's own position. */
   recenterToken: number;
@@ -88,6 +125,8 @@ type Store = {
   mySos: SosAlert | null;
   triggerSos: () => Promise<void>;
   cancelSos: () => Promise<void>;
+  alarmSounding: boolean;
+  silenceAlarm: () => void;
 
   refresh: () => Promise<void>;
 };
@@ -112,8 +151,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [ride, setRide] = useState<Ride | null>(null);
   const [sosAlerts, setSosAlerts] = useState<SosAlert[]>([]);
+  // Alerts the rider has silenced. Kept by id, so a fresh SOS sounds again
+  // even while an older one is still muted.
+  const [silenced, setSilenced] = useState<string[]>([]);
   const [typing, setTyping] = useState<Record<string, { name: string; at: number }>>({});
   const [sharingLocation, setSharingLocation] = useState(false);
+  const [trackingMode, setTrackingModeState] = useState<TrackingMode>(readTrackingMode);
+  const [backgroundTracking, setBackgroundTracking] = useState(keepAliveState);
   const [locationStatus, setLocationStatus] = useState<LocationStatus>("idle");
   const [recenterToken, setRecenterToken] = useState(0);
 
@@ -123,6 +167,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const groupIdRef = useRef<string | null>(activeGroupId);
   // Read inside the geolocation callback, which outlives a single render.
   const ridingRef = useRef(false);
+  // The freshest fix, readable from an action that was created before it came
+  // in -- an SOS raised seconds after opening the app must not miss it.
+  const myLocationRef = useRef<RiderLocation | null>(null);
+  // Throttles the HTTP fallback for position updates.
+  const lastPostAt = useRef(0);
 
   const group = useMemo(
     () => groups.find((candidate) => candidate.id === activeGroupId) ?? groups[0] ?? null,
@@ -369,17 +418,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       rideId: null,
     };
     setMyLocation(next);
+    myLocationRef.current = next;
     setLocationError(null);
     // Your position only leaves the device while you are on a ride. Off a
     // ride it stays here, shown to you and to nobody else.
-    if (groupId && ridingRef.current)
-      ws.send({
-        type: "location_update",
-        groupId,
-        latitude: next.latitude,
-        longitude: next.longitude,
-        accuracy: next.accuracy,
-      });
+    if (!groupId || !ridingRef.current) return;
+    const sent = ws.send({
+      type: "location_update",
+      groupId,
+      latitude: next.latitude,
+      longitude: next.longitude,
+      accuracy: next.accuracy,
+    });
+    if (sent) return;
+
+    // The socket is down -- which is the normal state of affairs for a minute
+    // after the app comes back from the background. Post over HTTP instead so
+    // the group's map does not sit on a position from before the gap, but do
+    // not hammer it: one update every few seconds is plenty.
+    const now = Date.now();
+    if (now - lastPostAt.current < REST_LOCATION_INTERVAL_MS) return;
+    lastPostAt.current = now;
+    void groupsApi
+      .shareLocation(groupId, next.latitude, next.longitude, next.accuracy)
+      .catch(() => undefined);
   }, []);
 
   const startLocation = useCallback(() => {
@@ -433,16 +495,92 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     watchId.current = null;
     setSharingLocation(false);
     setMyLocation(null);
+    myLocationRef.current = null;
   }, []);
+
+  /**
+   * One fix, awaited. The watch that startLocation sets up can be several
+   * seconds from its first callback, and an SOS must not fail meanwhile and
+   * ask the rider to press the button again.
+   */
+  const fixNow = useCallback(
+    () =>
+      new Promise<RiderLocation>((resolve, reject) => {
+        if (!("geolocation" in navigator))
+          return reject(new Error("This browser cannot share a location."));
+        if (!window.isSecureContext)
+          return reject(new Error("Location sharing needs a secure (https) connection."));
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            publishLocation(position);
+            const fix = myLocationRef.current;
+            if (fix) resolve(fix);
+            else reject(new Error("Could not read your location."));
+          },
+          (cause) =>
+            reject(
+              new Error(
+                cause.code === cause.PERMISSION_DENIED
+                  ? "Location is blocked for this site. Allow it to raise an SOS."
+                  : "No GPS fix yet — move somewhere with a clearer view of the sky.",
+              ),
+            ),
+          { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
+        );
+      }),
+    [publishLocation],
+  );
 
   useEffect(() => () => stopLocation(), [stopLocation]);
 
+  const riding = Boolean(ride && ride.joined && !ride.endedAt);
+
   useEffect(() => {
-    const riding = Boolean(ride && ride.joined && !ride.endedAt);
     ridingRef.current = riding;
     // Off a ride nobody is sharing, so hold no positions but your own.
     if (!riding) setLocations((current) => (current.length ? [] : current));
-  }, [ride]);
+  }, [riding]);
+
+  // Keep reporting for as long as the ride lasts: hold the screen awake, and
+  // in background mode keep the tab alive once the rider switches away.
+  useEffect(() => {
+    if (!riding || trackingMode === "off") return;
+    holdScreenAwake();
+    if (trackingMode === "background") startBackgroundKeepAlive();
+    return () => {
+      letScreenSleep();
+      stopBackgroundKeepAlive();
+    };
+  }, [riding, trackingMode]);
+
+  useEffect(() => onKeepAliveChange(setBackgroundTracking), []);
+
+  // A watch that has been suspended in the background can come back without
+  // firing, so in background mode ask for a fix outright on a timer as well.
+  useEffect(() => {
+    if (!riding || trackingMode !== "background") return;
+    const timer = window.setInterval(() => {
+      navigator.geolocation?.getCurrentPosition(publishLocation, () => undefined, {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 10000,
+      });
+    }, BACKGROUND_FIX_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [riding, trackingMode, publishLocation]);
+
+  // Coming back to the app after it was away: the socket is usually dead, the
+  // watch may have stalled, and everything on screen is as old as the gap.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      ws.resume();
+      if (watchId.current !== null) startLocation();
+      void refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [startLocation, refresh]);
 
   const sendMessage = async (text: string) => {
     if (!group) return;
@@ -493,6 +631,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     () => sosAlerts.find((alert) => alert.riderId === user?.id) ?? null,
     [sosAlerts, user],
   );
+
+  // A browser will not let audio start until the page has been interacted
+  // with, so claim that permission on the first gesture -- long before an
+  // alert arrives, when there is no time to ask.
+  useEffect(() => {
+    const unlock = () => unlockAlarm();
+    window.addEventListener("pointerdown", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, []);
+
+  const unsilenced = sosAlerts.filter((alert) => !silenced.includes(alert.id)).length;
+
+  // The siren runs on every rider's device -- whoever raised it and everyone
+  // else in the group -- until the last alert is cancelled or silenced.
+  useEffect(() => {
+    if (unsilenced) startAlarm();
+    else stopAlarm();
+  }, [unsilenced]);
+
+  // Never leave a siren running behind a closing app.
+  useEffect(() => stopAlarm, []);
+
+  // Once the group is clear, forget what was silenced so the next SOS sounds.
+  useEffect(() => {
+    if (!sosAlerts.length) setSilenced((current) => (current.length ? [] : current));
+  }, [sosAlerts.length]);
 
   const value = useMemo<Store>(
     () => ({
@@ -547,6 +715,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       locationError,
       locationStatus,
       sharingLocation,
+      trackingMode,
+      setTrackingMode: (mode) => {
+        localStorage.setItem(TRACKING_MODE_KEY, mode);
+        setTrackingModeState(mode);
+      },
+      backgroundTrackingSupported: backgroundKeepAliveSupported(),
+      backgroundTracking,
       recenterToken,
       recenter: () => setRecenterToken((token) => token + 1),
       startLocation,
@@ -591,22 +766,42 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       triggerSos: () =>
         guard(async () => {
           if (!group) throw new Error("Join a group before raising an SOS.");
+          // An SOS is a position sent to the riders you are out with, so it
+          // only means anything while a ride is running.
+          if (!ridingRef.current)
+            throw new Error("Start or join a ride before raising an SOS.");
+          // Keep the watch running so the alert's position stays current, but
+          // wait on a one-shot fix if none has arrived yet.
           startLocation();
-          const position = myLocation;
-          if (!position)
-            throw new Error("Waiting for a location fix — try again in a moment.");
-          ws.send({
+          const position = myLocationRef.current ?? (await fixNow());
+          const sent = ws.send({
             type: "sos_trigger",
             groupId: group.id,
             latitude: position.latitude,
             longitude: position.longitude,
           });
+          if (sent) return;
+          // No socket: raise it over HTTP instead, and show it locally since
+          // the broadcast that normally feeds it back cannot reach us.
+          const alert = await sosApi.trigger(
+            group.id,
+            position.latitude,
+            position.longitude,
+          );
+          setSosAlerts((current) => [
+            alert,
+            ...current.filter((entry) => entry.id !== alert.id),
+          ]);
         }),
       cancelSos: () =>
         guard(async () => {
           if (!group) return;
-          ws.send({ type: "sos_cancel", groupId: group.id });
+          if (ws.send({ type: "sos_cancel", groupId: group.id })) return;
+          const alert = await sosApi.cancel(group.id);
+          setSosAlerts((current) => current.filter((entry) => entry.id !== alert.id));
         }),
+      alarmSounding: unsilenced > 0,
+      silenceAlarm: () => setSilenced(sosAlerts.map((alert) => alert.id)),
 
       refresh,
     }),
@@ -626,6 +821,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       locationError,
       locationStatus,
       sharingLocation,
+      trackingMode,
+      backgroundTracking,
       recenterToken,
       startLocation,
       stopLocation,
@@ -634,6 +831,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       typing,
       sosAlerts,
       mySos,
+      unsilenced,
+      fixNow,
       refresh,
     ],
   );

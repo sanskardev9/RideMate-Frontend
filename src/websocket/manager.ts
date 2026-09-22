@@ -21,9 +21,13 @@ class WebSocketManager {
   }
 
   connect() {
-    const base = import.meta.env.VITE_WS_BASE_URL;
+    // With no host configured the socket is same-origin, which is what the dev
+    // proxy and any single-origin deployment want; https pages need wss.
+    const base =
+      import.meta.env.VITE_WS_BASE_URL ||
+      `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}`;
     const token = session.token();
-    if (!base || !token || this.socket) return;
+    if (!token || this.socket) return;
 
     this.closedByUs = false;
     const socket = new WebSocket(
@@ -67,6 +71,18 @@ class WebSocketManager {
     if (!this.connected) return false;
     this.socket!.send(JSON.stringify(event));
     return true;
+  }
+
+  /**
+   * Reconnect now rather than at the end of the backoff. Called when the app
+   * comes back to the foreground: the socket has almost certainly been closed
+   * while it was away, and the rider should not wait out a 30-second wait.
+   */
+  resume() {
+    if (this.connected || this.closedByUs) return;
+    window.clearTimeout(this.reconnectTimer);
+    this.retry = 0;
+    this.connect();
   }
 
   subscribe(listener: Listener) {
