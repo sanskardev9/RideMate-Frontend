@@ -1,5 +1,7 @@
 import { ws } from "../websocket/manager";
 import { session } from "../api/client";
+import { devLog } from "../utils/devLog";
+import { setCallAudio } from "../audio/session";
 
 /**
  * Voice calls between riders: one to one, or the whole group at once.
@@ -31,6 +33,35 @@ const iceServers: RTCIceServer[] = [
 
 /** Beyond this a mesh asks more of a phone's uplink than it can give. */
 const MAX_PEERS = 5;
+
+/**
+ * getUserMedia fails for several unrelated reasons, and "needs microphone
+ * access" for all of them sends people to a settings screen that is already
+ * right. Name the actual cause.
+ */
+function microphoneError(cause: unknown, action: string) {
+  const name = cause instanceof DOMException ? cause.name : "";
+  devLog("call: microphone failed", {
+    name,
+    message: cause instanceof Error ? cause.message : String(cause),
+    secureContext: window.isSecureContext,
+  });
+  switch (name) {
+    case "InsecureContextError":
+      return "Calls need the https address of RideMate; this page is on plain http.";
+    case "NotAllowedError":
+    case "SecurityError":
+      return `Microphone is blocked for this site. Allow it in the browser's site settings to ${action}.`;
+    case "NotFoundError":
+    case "OverconstrainedError":
+      return "No microphone was found on this device.";
+    case "NotReadableError":
+    case "AbortError":
+      return "The microphone is busy in another app or call. Close it and try again.";
+    default:
+      return `Could not open the microphone to ${action}.`;
+  }
+}
 
 export type CallKind = "direct" | "group";
 export type CallPhase = "idle" | "ringing" | "calling" | "active";
@@ -165,8 +196,8 @@ class CallManager {
     });
     try {
       await this.openMicrophone();
-    } catch {
-      this.publish({ ...IDLE, error: "RideMate needs microphone access to make a call." });
+    } catch (cause) {
+      this.publish({ ...IDLE, error: microphoneError(cause, "make a call") });
       return;
     }
     // Hung up while the microphone was being granted.
@@ -180,9 +211,9 @@ class CallManager {
     if (this.state.phase !== "ringing" || !callId || !groupId || !invitedBy) return;
     try {
       await this.openMicrophone();
-    } catch {
+    } catch (cause) {
       this.decline();
-      this.publish({ error: "RideMate needs microphone access to take a call." });
+      this.publish({ error: microphoneError(cause, "take a call") });
       return;
     }
     this.publish({ phase: "calling", invitedBy: null });
@@ -350,12 +381,22 @@ class CallManager {
 
   private async openMicrophone() {
     if (this.local) return this.local;
-    // Voice only: a rider does not need to look at anything, and audio keeps
-    // working on a connection that video would drown.
-    this.local = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true },
-      video: false,
-    });
+    // Browsers only expose mediaDevices on https (or localhost).
+    if (!navigator.mediaDevices?.getUserMedia)
+      throw new DOMException("No mediaDevices on this page", "InsecureContextError");
+    // iOS refuses capture while the page is in a playback-only audio session.
+    setCallAudio(true);
+    try {
+      // Voice only: a rider does not need to look at anything, and audio keeps
+      // working on a connection that video would drown.
+      this.local = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+        video: false,
+      });
+    } catch (cause) {
+      setCallAudio(false);
+      throw cause;
+    }
     return this.local;
   }
 
@@ -429,6 +470,7 @@ class CallManager {
     [...this.peers.keys()].forEach((userId) => this.dropPeer(userId));
     this.local?.getTracks().forEach((track) => track.stop());
     this.local = undefined;
+    setCallAudio(false);
     this.names.clear();
     this.invited.clear();
     this.publish({ ...IDLE });

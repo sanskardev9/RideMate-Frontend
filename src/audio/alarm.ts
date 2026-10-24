@@ -7,6 +7,9 @@
  * `unlockAlarm` is wired to the first gesture and the context is kept alive
  * from then on.
  */
+import { devLog } from "../utils/devLog";
+import { setSirenAudio } from "./session";
+
 const CARRIER_HZ = 620; // middle of the two-tone sweep
 const SWING_HZ = 260; // how far either side of it the tone steps
 const WAIL_HZ = 3.1; // steps per second
@@ -34,10 +37,14 @@ function context(): AudioContext | null {
   return ctx;
 }
 
-/** Call from a user gesture so the siren is allowed to sound later on. */
+/**
+ * Call from a user gesture so the siren is allowed to sound later on. iOS also
+ * leaves the context "interrupted" after a call or a trip to the background,
+ * so this runs on every gesture, not only the first.
+ */
 export function unlockAlarm() {
   const audio = context();
-  if (audio?.state === "suspended") void audio.resume();
+  if (audio && audio.state !== "running") void audio.resume();
 }
 
 export function alarmSupported() {
@@ -48,6 +55,11 @@ export function startAlarm() {
   if (running) return;
   const audio = context();
   if (!audio) return;
+  // iOS mutes default web audio with the silent switch; a siren must not be.
+  setSirenAudio(true);
+  devLog("sos: siren started", { audioState: audio.state });
+  // Before any tap the browser keeps the context suspended; the siren then
+  // starts on the next tap anywhere, via unlockAlarm.
   void audio.resume();
 
   // A square carrier whose pitch is stepped up and down by a second, very slow
@@ -89,6 +101,7 @@ export function stopAlarm() {
   const current = running;
   if (!current) return;
   running = null;
+  setSirenAudio(false);
   window.clearInterval(current.buzzer);
   navigator.vibrate?.(0);
 

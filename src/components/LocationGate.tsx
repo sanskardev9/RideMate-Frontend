@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useApp } from "../store/appStore";
+import { devLog } from "../utils/devLog";
 
 /**
  * A page cannot grant itself geolocation — only the browser's own prompt can,
@@ -58,7 +59,16 @@ export function LocationGate({ onClose }: { onClose: () => void }) {
   // Keep the sheet open: if the browser has already blocked us the request
   // fails instantly, and the sheet turns into the instructions in place
   // rather than making someone hunt for a second button.
-  const allow = () => startLocation();
+  const allow = () => {
+    devLog("location: Allow tapped", {
+      locationStatus,
+      secureContext: window.isSecureContext,
+      hasGeolocation: "geolocation" in navigator,
+      hasGroup: Boolean(group),
+      userAgent: navigator.userAgent,
+    });
+    startLocation();
+  };
 
   useEffect(() => {
     if (locationStatus === "granted") onClose();

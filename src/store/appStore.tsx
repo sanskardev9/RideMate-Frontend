@@ -18,6 +18,7 @@ import {
   toMessage,
   toSosAlert,
 } from "../api/client";
+import { devLog } from "../utils/devLog";
 import { ws } from "../websocket/manager";
 import { startAlarm, stopAlarm, unlockAlarm } from "../audio/alarm";
 import {
@@ -162,6 +163,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [recenterToken, setRecenterToken] = useState(0);
 
   const watchId = useRef<number | null>(null);
+  // True between asking for a position and the browser's first answer.
+  const awaitingFirstAnswer = useRef(false);
+  const lastRequestAt = useRef(0);
   const typingSentAt = useRef(0);
   // Read inside the geolocation callback, which outlives a single render.
   const groupIdRef = useRef<string | null>(activeGroupId);
@@ -446,6 +450,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const startLocation = useCallback(() => {
     if (!groupIdRef.current) {
+      devLog("location: stopped, no group");
       setLocationError("Join or create a group before sharing your location.");
       return;
     }
@@ -455,11 +460,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     if (!window.isSecureContext) {
+      devLog("location: stopped, page is not https");
       setLocationStatus("insecure");
       setLocationError("Location sharing needs a secure (https) connection.");
       return;
     }
 
+    // While the browser's permission prompt is up, clearing the watch withdraws
+    // the request and with it the prompt, so a second tap would hide the very
+    // dialog the first one opened. Leave a pending request alone for a while,
+    // but not forever, in case the browser never answers at all.
+    if (
+      watchId.current !== null &&
+      awaitingFirstAnswer.current &&
+      Date.now() - lastRequestAt.current < 15000
+    ) {
+      devLog("location: tap ignored, still waiting on the previous request");
+      return;
+    }
+
+    devLog("location: watchPosition requested, waiting for the browser");
     // Always drop the previous watch first. watchPosition hands back an id
     // even when it fails immediately, so holding on to it made every retry a
     // silent no-op -- the button appeared dead.
@@ -467,12 +487,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     watchId.current = null;
     setLocationError(null);
 
+    awaitingFirstAnswer.current = true;
+    const requestedAt = Date.now();
+    lastRequestAt.current = requestedAt;
+    window.setTimeout(() => {
+      if (awaitingFirstAnswer.current)
+        devLog("location: no answer from the browser after 10s (prompt never shown?)");
+    }, 10000);
+
     watchId.current = navigator.geolocation.watchPosition(
       (position) => {
+        if (awaitingFirstAnswer.current)
+          devLog("location: first answer", { afterMs: Date.now() - requestedAt });
+        awaitingFirstAnswer.current = false;
+        devLog("location: fix received", {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+        });
         setLocationStatus("granted");
         publishLocation(position);
       },
       (cause) => {
+        devLog("location: error", { code: cause.code, message: cause.message });
+        awaitingFirstAnswer.current = false;
         if (watchId.current !== null) navigator.geolocation.clearWatch(watchId.current);
         watchId.current = null;
         setSharingLocation(false);
@@ -493,6 +531,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const stopLocation = useCallback(() => {
     if (watchId.current !== null) navigator.geolocation?.clearWatch(watchId.current);
     watchId.current = null;
+    awaitingFirstAnswer.current = false;
     setSharingLocation(false);
     setMyLocation(null);
     myLocationRef.current = null;
@@ -634,11 +673,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // A browser will not let audio start until the page has been interacted
   // with, so claim that permission on the first gesture -- long before an
-  // alert arrives, when there is no time to ask.
+  // alert arrives, when there is no time to ask. Every gesture, not just the
+  // first: phones suspend the audio again after a call or backgrounding.
   useEffect(() => {
     const unlock = () => unlockAlarm();
-    window.addEventListener("pointerdown", unlock, { once: true });
-    window.addEventListener("keydown", unlock, { once: true });
+    window.addEventListener("pointerdown", unlock);
+    window.addEventListener("keydown", unlock);
     return () => {
       window.removeEventListener("pointerdown", unlock);
       window.removeEventListener("keydown", unlock);
